@@ -1,0 +1,25 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+Thumbs.db
+.env
+.env.*
+*.log
+*.tgz
+*.tar.gz
+*.zip
+
+# Never publish camera credentials or Home pairing identities.
+.hap/
+data/
+config.local.json
+options.json
+identity.json
+pairing.json
+runtime.json
+*.tmp
+go2rtc.yaml
+go2rtc.json
+health.json
+diagnostics/

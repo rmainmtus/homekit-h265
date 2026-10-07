@@ -1,0 +1,35 @@
+name: HomeKit H.265
+version: "0.1.0"
+slug: homekit_h265
+description: Native HEVC camera streaming and experimental Secure Video for Apple Home
+url: https://github.com/rmainmtus/homekit-h265
+arch:
+  - aarch64
+  - amd64
+stage: experimental
+startup: application
+boot: auto
+init: true
+host_network: true
+timeout: 30
+backup: cold
+options:
+  name: HEVC Camera
+  address: ""
+  stream_url: ""
+  motion_url: ""
+  port: 36460
+  recording: true
+  average_kbps: 4000
+  peak_kbps: 8000
+  relay_port: 18554
+schema:
+  name: str(1,64)
+  address: str
+  stream_url: password
+  motion_url: password
+  port: int(1024,65535)
+  recording: bool
+  average_kbps: int(64,100000)
+  peak_kbps: int(64,100000)
+  relay_port: int(1024,65535)

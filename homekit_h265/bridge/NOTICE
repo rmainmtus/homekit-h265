@@ -1,0 +1,15 @@
+HomeKit H.265
+Copyright 2026 rmainmtus and contributors
+
+New project contributions are licensed under Apache License 2.0.
+This project includes MIT-licensed camera.ui code and Apache-2.0 HAP-NodeJS
+adaptations. Their notices, source revisions and license terms are preserved in
+homekit_h265/bridge/THIRD-PARTY-LICENSE.txt (installed as
+/opt/homekit-h265/THIRD-PARTY-LICENSE.txt). Bundled go2rtc is MIT-licensed; see
+homekit_h265/licenses/go2rtc-LICENSE (installed as
+/opt/homekit-h265/licenses/go2rtc-LICENSE). Runtime Node.js packages retain their own
+license files in the installed image.
+
+Apple, HomeKit, Home Assistant, and Raspberry Pi are names of their respective
+owners. This independent community project is not affiliated with those projects
+or companies.

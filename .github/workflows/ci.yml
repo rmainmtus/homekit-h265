@@ -1,0 +1,95 @@
+name: Validate app
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: homekit_h265/bridge/package-lock.json
+      - name: Install locked bridge dependencies
+        working-directory: homekit_h265/bridge
+        run: npm ci --no-audit --no-fund
+      - name: Build and test bridge
+        working-directory: homekit_h265/bridge
+        run: npm test
+      - name: Test app runtime
+        run: node --test homekit_h265/runtime/*.test.cjs
+      - name: Validate repository and app manifests
+        run: |
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+          app = yaml.safe_load(Path('homekit_h265/config.yaml').read_text())
+          repo = yaml.safe_load(Path('repository.yaml').read_text())
+          package = json.loads(Path('homekit_h265/bridge/package.json').read_text())
+          assert app['version'] == package['version'], 'App/package versions must match'
+          assert set(app['arch']) == {'aarch64', 'amd64'}
+          assert app['slug'] == 'homekit_h265'
+          assert app['host_network'] is True and app['init'] is True
+          assert set(app['schema']) == set(app['options'])
+          assert app['schema']['stream_url'] == app['schema']['motion_url'] == 'password'
+          for capability in ('full_access', 'docker_api', 'hassio_api', 'homeassistant_api', 'host_pid'):
+              assert not app.get(capability), f'Unexpected elevated capability: {capability}'
+          assert not app.get('privileged')
+          assert repo['url'] == app['url'] == 'https://github.com/rmainmtus/homekit-h265'
+          print('Repository and app manifest checks passed')
+          PY
+
+  image:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Read app version
+        id: metadata
+        run: echo "version=$(jq -r .version homekit_h265/bridge/package.json)" >> "$GITHUB_OUTPUT"
+      - name: Build image without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: homekit_h265
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            BUILD_ARCH=${{ matrix.arch }}
+            BUILD_VERSION=${{ steps.metadata.outputs.version }}
+          tags: homekit-h265:test
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Check packaged executables
+        run: |
+          docker run --rm --platform '${{ matrix.platform }}' --entrypoint node homekit-h265:test --check /opt/homekit-h265/runtime/launcher.cjs
+          docker run --rm --platform '${{ matrix.platform }}' --entrypoint ffmpeg homekit-h265:test -version
+          docker run --rm --platform '${{ matrix.platform }}' --entrypoint go2rtc homekit-h265:test -version
+      - name: Verify native HEVC and audio through the bundled relay
+        run: docker run --rm --init --network none --platform '${{ matrix.platform }}' --entrypoint node homekit-h265:test /opt/homekit-h265/runtime/media-smoke.cjs

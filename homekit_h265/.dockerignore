@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/.git
+**/.hap
+**/.env
+**/.env.*
+**/config.local.json
+**/options.json
+**/identity.json
+**/*.log
+**/*.tar.gz
+**/*.zip
+**/coverage
+test
+tests
