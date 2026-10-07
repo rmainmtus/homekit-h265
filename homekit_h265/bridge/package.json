@@ -7,7 +7,7 @@
   "engines": { "node": ">=22 <25" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "test": "npm run build && node --test --test-timeout=30000 dist/test/*.test.js",
     "start": "node dist/standalone.js"
   },
   "dependencies": {

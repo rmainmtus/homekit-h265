@@ -28,6 +28,7 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Build and test bridge
         working-directory: homekit_h265/bridge
+        timeout-minutes: 3
         run: npm test
       - name: Test app runtime
         run: node --test homekit_h265/runtime/*.test.cjs
