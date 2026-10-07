@@ -1,5 +1,5 @@
 name: HomeKit H.265
-version: "0.1.0"
+version: "0.1.1"
 slug: homekit_h265
 description: Native HEVC camera streaming and experimental Secure Video for Apple Home
 url: https://github.com/rmainmtus/homekit-h265

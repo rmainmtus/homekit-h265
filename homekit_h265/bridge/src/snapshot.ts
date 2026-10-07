@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import type {DataStreamManagement, GlobalRequestHandler} from 'hap-nodejs/dist/lib/datastream';
 import {HDSSnapshotTransport} from './HDSSnapshotTransport';
+import { signalChild } from './childProcess';
 
 // Compatibility adapter for pinned hap-nodejs 0.14.3. Its recording handler
 // rejects snapshot opens, so route only snapshot requests around that handler.
@@ -60,7 +61,7 @@ export async function captureSnapshot(ffmpeg: string, source: string, height: nu
     const chunks: Buffer[] = []; let size = 0, settled = false;
     const finish = (error?: number) => {
       if (settled) return; settled = true; clearTimeout(timer);
-      if (child.exitCode === null) child.kill('SIGKILL');
+      signalChild(child, 'SIGKILL');
       const image = Buffer.concat(chunks);
       if (error || image.length < 4 || image.readUInt16BE(0) !== 0xffd8 || image.readUInt16BE(image.length - 2) !== 0xffd9) reject(error || HAPStatus.SERVICE_COMMUNICATION_FAILURE);
       else resolve(image);

@@ -1,3 +1,4 @@
+import { signalChild } from '../childProcess';
 import dgram from 'node:dgram';
 import {readFileSync} from 'node:fs';
 import {spawn} from 'node:child_process';
@@ -20,12 +21,12 @@ async function main() {
   }));
   const p=spawn(c.ffmpeg,remoteMediaArguments(c.tiers[0],direct.inputPort,sockets[2].address().port),{stdio:'ignore'});
   try {
-    await new Promise(r=>setTimeout(r,15000));p.kill();
+    await new Promise(r=>setTimeout(r,15000));signalChild(p, 'SIGTERM');
     await new Promise(r=>setTimeout(r,650));
     const hashes=stats.map(s=>s.hash.digest('hex'));
     const same=hashes[0]===hashes[1];
     console.log(JSON.stringify({identicalPackets:same,direct:{packets:stats[0].packets,max5msBytes:stats[0].max5ms},paced:{packets:stats[1].packets,max5msBytes:stats[1].max5ms},pacing:paced.pacing}));
     if(!same||stats[0].packets<100||paced.pacing!.overloads)throw new Error('Pacing comparison failed');
-  } finally {p.kill();direct.close();paced.close();sockets.forEach(s=>s.close());}
+  } finally {signalChild(p, 'SIGTERM');direct.close();paced.close();sockets.forEach(s=>s.close());}
 }
 main().catch(()=>{console.error('Real camera pacing test failed');process.exitCode=1;});

@@ -11,7 +11,7 @@ const { EventEmitter, once } = require('node:events');
 const { PassThrough } = require('node:stream');
 const {
   DEFAULTS, SetupError, validateOptions, validPin, createPairing, atomicJson, parseProbe,
-  probeCamera, bridgeConfig, relayConfig, prepare, pipeSafeLogs, waitForRelay, assertPortAvailable, supervise,
+  probeCamera, bridgeConfig, relayConfig, prepare, pipeSafeLogs, waitForRelay, killTree, assertPortAvailable, supervise,
 } = require('./launcher.cjs');
 
 const options = () => ({ ...DEFAULTS, address: '192.0.2.20',
@@ -39,8 +39,9 @@ function diskSnapshot(dir) {
   });
 }
 
-function mockChild() {
+function mockChild(pid = 123456789) {
   const child = new EventEmitter();
+  child.pid = pid;
   child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.signals = [];
   child.kill = signal => { child.signals.push(signal); return true; };
@@ -199,7 +200,7 @@ test('ffprobe timeout and cancellation kill the actual child process', async t =
       timeoutMs: action === 'timeout' ? 75 : 10000, signal: controller.signal,
       spawnImpl: (_command, _args, spawnOptions) => {
         child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], spawnOptions);
-        t.after(() => { try { child.kill('SIGKILL'); } catch {} });
+        t.after(() => { try { if (Number.isInteger(child.pid) && child.pid > 0) child.kill('SIGKILL'); } catch {} });
         return child;
       },
     });
@@ -209,6 +210,67 @@ test('ffprobe timeout and cancellation kill the actual child process', async t =
     await closed;
     assert.ok(child.signalCode !== null || child.exitCode !== null);
   }
+});
+
+test('ffprobe never kills a failed spawn without a positive integer PID', async () => {
+  for (const pid of [undefined, null, 0, -1, NaN, Infinity, 1.5, '123']) {
+    let child;
+    await assert.rejects(probeCamera(options().stream_url, { spawnImpl: () => {
+      child = mockChild(); child.pid = pid;
+      queueMicrotask(() => child.emit('error', new Error('spawn failed')));
+      return child;
+    } }), /could not start/);
+    assert.deepEqual(child.signals, [], `Must not call kill on failed spawn PID ${String(pid)}`);
+  }
+});
+
+test('abort before a failed spawn emits its error never calls its kill method', async () => {
+  for (const pid of [undefined, 0, -1]) {
+    const controller = new AbortController();
+    let child;
+    const promise = probeCamera(options().stream_url, { signal: controller.signal, spawnImpl: () => {
+      child = mockChild(); child.pid = pid;
+      queueMicrotask(() => child.emit('error', new Error('delayed spawn failure')));
+      return child;
+    } });
+    controller.abort();
+    await assert.rejects(promise, /cancelled/);
+    await nextTurn();
+    assert.deepEqual(child.signals, []);
+  }
+});
+
+test('a real missing executable aborted before its spawn error is never sent a kill', async () => {
+  const controller = new AbortController();
+  let calls = 0, child;
+  const promise = probeCamera(options().stream_url, { signal: controller.signal, spawnImpl: () => {
+    child = spawn(path.join(os.tmpdir(), 'homekit-h265-definitely-not-an-executable'), [], { stdio: 'pipe', shell: false });
+    // Never invoke libuv from this regression, even if the protection regresses.
+    child.kill = () => { calls++; return false; };
+    return child;
+  } });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  assert.equal(child.pid, undefined);
+  controller.abort();
+  await assert.rejects(promise, /cancelled/);
+  await closed;
+  assert.equal(calls, 0);
+});
+
+test('process-tree cleanup rejects invalid PIDs before either OS or child kill', t => {
+  const groupSignals = [];
+  t.mock.method(process, 'kill', (pid, signal) => { groupSignals.push([pid, signal]); return true; });
+  for (const pid of [undefined, null, 0, -1, NaN, Infinity, 1.5, '123']) {
+    const child = mockChild(); child.pid = pid;
+    killTree(child, 'SIGTERM'); killTree(child, 'SIGKILL');
+    assert.deepEqual(child.signals, []);
+  }
+  assert.deepEqual(groupSignals, []);
+  // A valid mock can exercise dispatch safely; process.kill stays mocked here.
+  const valid = mockChild();
+  killTree(valid, 'SIGTERM');
+  if (process.platform === 'win32') assert.deepEqual(valid.signals, ['SIGTERM']);
+  else assert.deepEqual(groupSignals, [[-valid.pid, 'SIGTERM']]);
 });
 
 test('cancelled validation cannot persist fresh identity', async t => {
@@ -296,6 +358,32 @@ test('signal while relay is starting never launches the bridge', async () => {
   }) });
   await nextTurn(); h.controller.abort();
   assert.equal(await h.promise, 0); assert.equal(h.children.length, 1);
+});
+
+test('supervisor cleanup never signals a relay whose spawn failed, including abort before error', async t => {
+  const osSignals = [];
+  t.mock.method(process, 'kill', (pid, signal) => { osSignals.push([pid, signal]); return true; });
+  for (const abortFirst of [false, true]) {
+    const controller = new AbortController();
+    let child;
+    const result = await supervise(preparedStub(), {
+      signal: controller.signal, log: () => {}, checkPort: async () => {}, graceMs: 20,
+      spawnImpl: () => {
+        child = mockChild(); child.pid = undefined;
+        queueMicrotask(() => { child.emit('error', new Error('spawn failed')); child.emit('close', -2); });
+        return child;
+      },
+      waitReady: (_port, { signal }) => {
+        if (abortFirst) { controller.abort(); return Promise.resolve(); }
+        return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+      },
+      // Use the real guarded cleanup function; OS signal dispatch is mocked above.
+      kill: killTree,
+    });
+    assert.equal(result, abortFirst ? 0 : 1);
+    assert.deepEqual(child.signals, []);
+  }
+  assert.deepEqual(osSignals, []);
 });
 
 test('children ignoring graceful termination are killed after bounded grace period', async () => {

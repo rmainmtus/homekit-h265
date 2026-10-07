@@ -1,3 +1,4 @@
+import { signalChild } from '../childProcess';
 // Explicit real-camera test; not part of the unit suite. No pairing is performed.
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -56,6 +57,6 @@ async function main() {
       }, 250);
     });
     console.log(JSON.stringify({videoFrames, audioFrames, decodeFrames, authFailures, nativeHevc: true}));
-  } finally {console.log(JSON.stringify({videoFrames, audioFrames, decodeFrames, authFailures, decodeErrors})); decoder.stdin.destroy(); decoder.kill('SIGKILL'); await remote.stopAll(); await pc.close();}
+  } finally {console.log(JSON.stringify({videoFrames, audioFrames, decodeFrames, authFailures, decodeErrors})); decoder.stdin.destroy(); signalChild(decoder, 'SIGKILL'); await remote.stopAll(); await pc.close();}
 }
 main().catch(e => {console.error(e.message); process.exitCode = 1;});

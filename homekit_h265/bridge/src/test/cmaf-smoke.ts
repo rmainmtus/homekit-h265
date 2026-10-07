@@ -1,3 +1,4 @@
+import { signalChild } from '../childProcess';
 import {readFileSync} from 'node:fs';
 import {spawn} from 'node:child_process';
 import {HevcRecording} from '../recording';
@@ -17,7 +18,7 @@ async function main() {
     if(durations.length!==3)throw new Error('No fragments');
     const p=spawn(c.ffmpeg,['-hide_banner','-loglevel','error','-i','pipe:0','-map','0:v:0','-frames:v','12','-f','framemd5','pipe:1']);
     let output='',errors=0;p.stdout.on('data',b=>output+=b);p.stderr.on('data',()=>errors++);p.stdin.on('error',()=>{});
-    const code=await new Promise<number|null>((resolve,reject)=>{p.once('error',reject);p.once('exit',resolve);p.stdin.end(Buffer.concat(parts));setTimeout(()=>p.kill('SIGKILL'),15000).unref();});
+    const code=await new Promise<number|null>((resolve,reject)=>{p.once('error',reject);p.once('exit',resolve);p.stdin.end(Buffer.concat(parts));setTimeout(()=>signalChild(p, 'SIGKILL'),15000).unref();});
     const frames=output.split('\n').filter(l=>/^0,/.test(l)).length;
     console.log(JSON.stringify({meta,durations,frames,errors,code}));
     if(code!==0||frames!==12||errors)throw new Error('Native recording decode failed');

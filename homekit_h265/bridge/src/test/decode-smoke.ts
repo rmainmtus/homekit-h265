@@ -1,3 +1,4 @@
+import { signalChild } from '../childProcess';
 import dgram from 'node:dgram';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -24,7 +25,7 @@ async function main() {
   let timer: NodeJS.Timeout;
   const ended = new Promise<void>(resolve => {receiver.once('close', () => {clearTimeout(timer); resolve();});
     receiver.once('error', () => {clearTimeout(timer); resolve();});
-    timer = setTimeout(() => receiver.kill('SIGKILL'), 18000);});
+    timer = setTimeout(() => signalChild(receiver, 'SIGKILL'), 18000);});
   const video = await relay('127.0.0.1', '127.0.0.1', port, undefined, true);
   const audio = await relay('127.0.0.1', '127.0.0.1', audioSink.address().port);
   const tier: Tier = {id: 1, quality: 2, width: 2304, height: 2592, fps: 12, averageKbps: 2466, peakKbps: 4111, rtspUrl: source};
@@ -35,6 +36,6 @@ async function main() {
     await ended;
     console.log(JSON.stringify({decodedFrames: frames, videoPackets: video.packets, decoderErrorChunks: errors, result: frames >= 12 ? 'PASS' : 'FAIL'}));
     if (frames < 12) process.exitCode = 1;
-  } finally {job?.stop(); receiver.kill('SIGKILL'); clearTimeout(timer!); video.close(); audio.close(); audioSink.close();}
+  } finally {job?.stop(); signalChild(receiver, 'SIGKILL'); clearTimeout(timer!); video.close(); audio.close(); audioSink.close();}
 }
 main().catch(() => {console.error('Local HEVC decrypt/decode test failed'); process.exitCode = 1;});

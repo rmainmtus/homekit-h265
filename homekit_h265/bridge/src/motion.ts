@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'node:child_process';
+import { signalChild } from './childProcess';
 
 // Decode only the camera's low-resolution substream. The recording video is copied.
 export class MotionDetector {
@@ -57,6 +58,6 @@ export class MotionDetector {
     child.on('error', ended); child.on('close', ended);
     this.log('HKSV motion detector running on low-resolution substream');
   }
-  private stop() {this.generation++; clearTimeout(this.timer); this.child?.kill('SIGKILL'); this.child = undefined; this.motion(false);}
+  private stop() {this.generation++; clearTimeout(this.timer); signalChild(this.child, 'SIGKILL'); this.child = undefined; this.motion(false);}
   close() {this.enabled = false; this.stop();}
 }

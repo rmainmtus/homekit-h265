@@ -7,6 +7,7 @@ import { Tier, Field, hapUuid, tlv, uint, parse, one, fromBase64, videoTiers, au
 import { SecureVideoSFrame } from './sframe';
 import { HevcAccessUnitAssembler, SFrameRtpPacketizer } from './sframeRtp';
 import { addVideoRtpStreamId, replayEarlyDtls, tuneIceBuffers } from './webrtcSdp';
+import { signalChild } from './childProcess';
 
 // Remote media follows cameraui/plugins' tested Apple relay implementation (MIT).
 const videoCodec = new RTCRtpCodecParameters({mimeType: 'video/H265', clockRate: 90000, payloadType: 99,
@@ -205,7 +206,7 @@ export class RemoteViewing {
     for (const socket of s.sockets) {try {socket.close();} catch {}}
     const child = s.child;
     if (child && child.exitCode === null) {
-      child.kill('SIGTERM'); const timer = setTimeout(() => {if (child.exitCode === null) child.kill('SIGKILL');}, 2000);
+      signalChild(child, 'SIGTERM'); const timer = setTimeout(() => {signalChild(child, 'SIGKILL');}, 2000);
       timer.unref(); child.once('exit', () => clearTimeout(timer));
     }
     await s.pc.close().catch(() => undefined); s.crypto.senderKey?.key.fill(0);

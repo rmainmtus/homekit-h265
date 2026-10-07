@@ -1,10 +1,12 @@
 {
   "name": "homekit-h265-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Native HEVC Apple Home camera service for the Home Assistant community app",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22 <25" },
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test --test-concurrency=1 --test-timeout=30000 dist/test/*.test.js",

@@ -3,6 +3,7 @@ import { ChildProcess, spawn } from 'node:child_process';
 import { Endpoint, Tier } from './protocol';
 import { FeedbackMonitor, FeedbackStats } from './feedback';
 import { DatagramPacer } from './pacing';
+import { signalChild } from './childProcess';
 
 export interface Relay {
   port: number; inputPort: number; packets: number; bytes: number;
@@ -112,8 +113,8 @@ export async function startMedia(ffmpeg: string, args: string[], video: Relay, a
     clearInterval(watchdog);
     signal?.removeEventListener('abort', abort);
     if (child.exitCode === null) {
-      child.kill('SIGTERM');
-      const timer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 2000);
+      signalChild(child, 'SIGTERM');
+      const timer = setTimeout(() => { signalChild(child, 'SIGKILL'); }, 2000);
       timer.unref(); child.once('exit', () => clearTimeout(timer));
     }
   }};

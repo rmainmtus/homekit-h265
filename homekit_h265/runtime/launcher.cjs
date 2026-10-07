@@ -152,8 +152,11 @@ function probeCamera(url, { spawnImpl = spawn, signal, timeoutMs = 25000, maxByt
     function finish(error, value) {
       if (settled) return;
       settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      // A failed spawn can retain a process handle before its asynchronous error,
+      // but has no PID. Never pass that handle to ChildProcess.kill: PID 0 can
+      // signal the launcher's entire process group on Unix.
       // ffprobe has no descendants; a hard stop bounds every timeout/cancellation.
-      try { child?.kill('SIGKILL'); } catch {}
+      try { if (Number.isInteger(child?.pid) && child.pid > 0) child.kill('SIGKILL'); } catch {}
       if (error) reject(error); else resolve(value);
     }
     signal?.addEventListener('abort', abort, { once: true });
@@ -260,8 +263,10 @@ function waitForRelay(port, { signal, timeoutMs = 8000 } = {}) {
 }
 
 function killTree(child, signal) {
+  // Missing/zero/negative PIDs are failed spawns, never process-group targets.
+  if (!Number.isInteger(child?.pid) || child.pid <= 0) return;
   try {
-    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
+    if (process.platform !== 'win32') process.kill(-child.pid, signal);
     else child.kill(signal);
   } catch { /* Already stopped. */ }
 }
@@ -354,5 +359,5 @@ async function main() {
 }
 
 module.exports = { DEFAULTS, SetupError, validateOptions, validatePairing, validPin, createPairing, savedPairing,
-  atomicJson, parseProbe, probeCamera, bridgeConfig, relayConfig, prepare, safeLine, pipeSafeLogs, waitForRelay, assertPortAvailable, supervise };
+  atomicJson, parseProbe, probeCamera, bridgeConfig, relayConfig, prepare, safeLine, pipeSafeLogs, waitForRelay, killTree, assertPortAvailable, supervise };
 if (require.main === module) main().then(code => { process.exitCode = code; });

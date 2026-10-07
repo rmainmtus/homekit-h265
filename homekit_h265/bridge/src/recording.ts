@@ -6,6 +6,7 @@ import { Mp4Framer, recordingFragment } from './mp4';
 import type { Tier } from './protocol';
 import {videoMetadata, fragmentDuration} from './cmafMedia';
 import type {CMAFClipRequest, CMAFSegment} from './cmafInterfaces';
+import { signalChild } from './childProcess';
 
 type Fragment = {data: Buffer; at: number; sequence: number; duration: number};
 export function recordingOptions(tier: Tier): CameraRecordingOptions {
@@ -171,7 +172,7 @@ export class HevcRecording implements CameraRecordingDelegate {
   private stopPipeline() {
     this.generation++; clearTimeout(this.restart); clearInterval(this.watchdog);
     const child = this.child; this.child = undefined;
-    try {child?.kill('SIGKILL');} catch { /* A failed spawn has no process to stop. */ }
+    signalChild(child, 'SIGKILL');
     if (this.stream) this.stream.stop = true;
     this.init = undefined; this.fragments = []; this.changed.emit('data');
   }
