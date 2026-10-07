@@ -26,10 +26,14 @@ jobs:
       - name: Install locked bridge dependencies
         working-directory: homekit_h265/bridge
         run: npm ci --no-audit --no-fund
-      - name: Build and test bridge
+      - name: Build bridge
         working-directory: homekit_h265/bridge
         timeout-minutes: 3
-        run: npm test
+        run: npm run build
+      - name: Test bridge
+        working-directory: homekit_h265/bridge
+        timeout-minutes: 3
+        run: node --test --test-concurrency=1 --test-timeout=30000 dist/test/*.test.js
       - name: Test app runtime
         run: node --test homekit_h265/runtime/*.test.cjs
       - name: Validate repository and app manifests
