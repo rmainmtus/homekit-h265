@@ -87,6 +87,11 @@ The CI workflow tests the bridge and launcher, then builds `linux/amd64` and
 fixes are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), especially before
 sharing logs. Report security issues using [SECURITY.md](SECURITY.md).
 
+## Say thanks
+
+If this project has helped you, you can [buy me a coffee](https://buymeacoffee.com/rmnt)
+to say thanks. Support is completely optional and always appreciated!
+
 ## Acknowledgements and license
 
 This project builds on [HAP-NodeJS](https://github.com/homebridge/HAP-NodeJS),

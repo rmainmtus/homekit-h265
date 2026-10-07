@@ -90,3 +90,8 @@ and stream startup. The bridge maintains its own buffer while recording is activ
 When reporting a problem, provide app version, CPU architecture, camera codec and
 dimensions, hub/client OS versions, and a short redacted log around the event.
 Never attach private app backups or complete Apple diagnostics to a public issue.
+
+## Say thanks
+
+If this project has helped you, you can [buy me a coffee](https://buymeacoffee.com/rmnt)
+to say thanks. Support is completely optional and always appreciated!
