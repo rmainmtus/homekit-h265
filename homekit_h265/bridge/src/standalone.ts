@@ -21,6 +21,18 @@ async function main() {
       renameSync(`${privacyFile}.tmp`, privacyFile);
     }
   });
+  let advertised = false;
+  const sendSetupStatus = () => {
+    if (!process.send || !process.connected || !lab.accessory._accessoryInfo) return;
+    try {
+      process.send({ type: 'homekit-status', name: config.name, pincode: config.pincode,
+        setupUri: lab.accessory.setupURI(), paired: lab.accessory._accessoryInfo.paired(),
+        ready: advertised }, () => {});
+    } catch { /* The launcher may already be shutting down. */ }
+  };
+  lab.accessory.on('advertised', () => { advertised = true; sendSetupStatus(); });
+  lab.accessory.on('paired', sendSetupStatus);
+  lab.accessory.on('unpaired', sendSetupStatus);
   let motion: MotionDetector | undefined;
   if (lab.nativeRecording) {
     const file = path.join(storage, 'cmaf.json');
@@ -54,9 +66,10 @@ async function main() {
     remoteSessions: lab.remote.sessions.size,
   })), 60000);
   health.unref();
-  const stop = async () => {if (stopping) return; stopping = true; clearInterval(health); motion?.close(); await lab.close();};
+  const stop = async () => {if (stopping) return; stopping = true; advertised = false; sendSetupStatus(); clearInterval(health); motion?.close(); await lab.close();};
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   await lab.publish();
+  sendSetupStatus();
   console.log(`Pair the separate accessory ${config.name}. See your private configuration for its pairing code.`);
 }
 main().catch(() => {console.error('Lab startup failed. Check private configuration and port availability.'); process.exitCode = 1;});

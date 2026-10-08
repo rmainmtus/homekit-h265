@@ -21,7 +21,9 @@ with every camera or Raspberry Pi installation.
 4. Enable **Start on boot** and **Watchdog** on the app's Info tab, then start it.
    Watchdog restarts the app after a failed startup or a service crash.
    The app checks the video format and creates a persistent accessory
-   identity. Use the pairing code shown in its log to add the camera in Apple Home.
+   identity. Click **Open Web UI** to scan the QR code or copy the pairing code.
+   Add the camera directly in **Apple Home**, with your iPhone on your home Wi-Fi.
+   Do not add this app's camera through Home Assistant's **HomeKit Device** integration.
 5. Choose streaming/recording and motion categories in Apple Home. Verify an actual
    recording and test viewing both at home and over cellular.
 

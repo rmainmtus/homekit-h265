@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+- Add an authenticated Home Assistant setup page with a HomeKit QR code,
+  copyable pairing code, and live pairing status.
+- Explain direct Apple Home pairing and detect when a controller has already
+  claimed the camera.
+- Add an explicit pairing reset that archives this app's HomeKit state before
+  restarting, preserving the camera configuration and numeric pairing code.
+- Restrict setup-page access to Home Assistant Ingress without Supervisor API access.
+
 ## 0.1.1
 
 - Guard every media shutdown against failed spawns before sending process signals.

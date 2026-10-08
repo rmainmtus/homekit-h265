@@ -50,6 +50,7 @@ jobs:
           assert set(app['arch']) == {'aarch64', 'amd64'}
           assert app['slug'] == 'homekit_h265'
           assert app['host_network'] is True and app['init'] is True
+          assert app['ingress'] is True and app['ingress_port'] == 18664
           assert set(app['schema']) == set(app['options'])
           assert app['schema']['stream_url'] == app['schema']['motion_url'] == 'password'
           for capability in ('full_access', 'docker_api', 'hassio_api', 'homeassistant_api', 'host_pid'):
@@ -94,6 +95,7 @@ jobs:
       - name: Check packaged executables
         run: |
           docker run --rm --platform '${{ matrix.platform }}' --entrypoint node homekit-h265:test --check /opt/homekit-h265/runtime/launcher.cjs
+          docker run --rm --platform '${{ matrix.platform }}' --entrypoint node homekit-h265:test -e "require('/opt/homekit-h265/runtime/setup-ui.cjs')"
           docker run --rm --platform '${{ matrix.platform }}' --entrypoint ffmpeg homekit-h265:test -version
           docker run --rm --platform '${{ matrix.platform }}' --entrypoint go2rtc homekit-h265:test -version
       - name: Verify native HEVC and audio through the bundled relay

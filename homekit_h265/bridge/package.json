@@ -1,6 +1,6 @@
 {
   "name": "homekit-h265-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Native HEVC Apple Home camera service for the Home Assistant community app",
   "license": "Apache-2.0",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "hap-nodejs": "0.14.3",
+    "qrcode": "1.5.4",
     "werift": "0.24.4"
   },
   "devDependencies": {

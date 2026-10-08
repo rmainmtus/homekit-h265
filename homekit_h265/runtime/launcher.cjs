@@ -6,8 +6,10 @@ const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { PairingResetError, backupAndResetPairing } = require('./pairing-reset.cjs');
 
 class SetupError extends Error {}
+const SETUP_PORT = 18664;
 const DEFAULTS = Object.freeze({
   name: 'HEVC Camera', address: '', stream_url: '', motion_url: '', port: 36460,
   recording: true, average_kbps: 4000, peak_kbps: 8000, relay_port: 18554,
@@ -49,6 +51,7 @@ function validateOptions(input) {
     if (!Number.isInteger(options[field]) || options[field] < 1024 || options[field] > 65535) invalid(`${field} must be an integer from 1024 to 65535.`);
   }
   if (options.port === options.relay_port) invalid('port and relay_port must be different.');
+  if (options.port === SETUP_PORT || options.relay_port === SETUP_PORT) invalid(`port and relay_port must differ from the setup page port ${SETUP_PORT}.`);
   if (typeof options.recording !== 'boolean') invalid('recording must be true or false.');
   for (const field of ['average_kbps', 'peak_kbps']) {
     if (!Number.isInteger(options[field]) || options[field] < 64 || options[field] > 100000) invalid(`${field} must be an integer from 64 to 100000.`);
@@ -281,7 +284,7 @@ function assertPortAvailable(address, port) {
 
 async function supervise(prepared, {
   spawnImpl = spawn, waitReady = waitForRelay, signal, log = console.log, kill = killTree, checkPort = assertPortAvailable,
-  graceMs = 5000, node = process.execPath, relay = '/usr/local/bin/go2rtc',
+  graceMs = 5000, forceGraceMs = 2000, onStatus, node = process.execPath, relay = '/usr/local/bin/go2rtc',
   standalone = '/opt/homekit-h265/bridge/dist/standalone.js',
 } = {}) {
   const children = [];
@@ -298,6 +301,12 @@ async function supervise(prepared, {
       clearTimeout(deadline);
       // Also reap descendants if a bridge crashes before it can stop its FFmpeg jobs.
       for (const entry of children) kill(entry.child, 'SIGKILL');
+      await Promise.race([Promise.all(children.map(entry => entry.closed)), new Promise(resolve => { deadline = setTimeout(resolve, forceGraceMs); })]);
+      clearTimeout(deadline);
+      if (children.some(entry => !entry.done)) {
+        exitCode = 1;
+        log('Camera services did not finish stopping. Pairing state must remain unchanged.');
+      }
       finish(exitCode);
     })();
     return stopping;
@@ -308,13 +317,20 @@ async function supervise(prepared, {
     if (signal?.aborted || stoppingStarted) throw new SetupError('Startup cancelled.');
     const child = spawnImpl(executable, args, { stdio, detached: process.platform !== 'win32', windowsHide: true, shell: false });
     let closed;
-    const entry = { child, closed: new Promise(resolve => { closed = resolve; }) };
+    const entry = { child, done: false, closed: new Promise(resolve => { closed = resolve; }) };
     children.push(entry);
-    const failed = () => { closed(); if (!stoppingStarted) { log(`${label} stopped unexpectedly. Restarting the app is required.`); void stop(1); } };
-    child.once('error', failed);
-    child.once('close', failed);
+    const failed = () => { if (!stoppingStarted) { log(`${label} stopped unexpectedly. Restarting the app is required.`); void stop(1); } };
+    child.once('error', () => {
+      if (!Number.isInteger(child.pid) || child.pid <= 0) { entry.done = true; closed(); }
+      failed();
+    });
+    child.once('close', () => { entry.done = true; closed(); failed(); });
     if (label === 'HomeKit bridge') {
       pipeSafeLogs(child.stdout, log); pipeSafeLogs(child.stderr, log);
+      if (onStatus) child.on('message', message => {
+        const status = parseStatus(message, prepared.state.pincode);
+        if (status && !stoppingStarted) onStatus(status);
+      });
     }
     return child;
   }
@@ -326,7 +342,8 @@ async function supervise(prepared, {
       start('RTSP relay', relay, ['-config', path.join(prepared.dataDir, 'go2rtc.json')], 'ignore');
       await waitReady(prepared.options.relay_port, { signal: startup.signal });
       if (!stoppingStarted) {
-        start('HomeKit bridge', node, [standalone, path.join(prepared.dataDir, 'config.local.json')], ['ignore', 'pipe', 'pipe']);
+        start('HomeKit bridge', node, [standalone, path.join(prepared.dataDir, 'config.local.json')],
+          onStatus ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe']);
         log(`Camera source validated: HEVC ${prepared.media.width}x${prepared.media.height}, ${prepared.media.measuredFps.toFixed(2)} fps, audio ${prepared.media.audio}.`);
         log(`HomeKit pairing code: ${prepared.state.pincode}`);
         log('HomeKit bridge starting. Keep this app and its backup to preserve pairing and recording history.');
@@ -340,6 +357,101 @@ async function supervise(prepared, {
   return exitCode;
 }
 
+function parseStatus(message, pincode) {
+  if (!message || message.type !== 'homekit-status' || message.pincode !== pincode || !validPin(message.pincode) ||
+      typeof message.name !== 'string' || message.name.length > 100 || /[\x00-\x1f\x7f]/.test(message.name) ||
+      typeof message.paired !== 'boolean' || typeof message.ready !== 'boolean' ||
+      (message.setupUri !== null && message.setupUri !== undefined && !/^X-HM:\/\/[0-9A-Z]{13}$/.test(message.setupUri))) return undefined;
+  return { name: message.name, pincode, setupUri: message.setupUri || null,
+    paired: message.paired, ready: message.ready, error: null };
+}
+
+function pauseForRetry(signal, milliseconds) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, milliseconds);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+async function runApplication({
+  dataDir = '/data', signal, log = console.log, validateBridge,
+  prepareImpl = prepare, superviseImpl = supervise, resetImpl = backupAndResetPairing,
+  uiFactory = options => require('./setup-ui.cjs').startSetupServer(options), retryMs = 5000,
+} = {}) {
+  let status = { name: DEFAULTS.name, pincode: null, setupUri: null, paired: null, ready: false, error: null };
+  let cycle, resetting = false, ui;
+  const getStatus = () => ({ ...status });
+  const resetPairing = () => {
+    if (signal?.aborted || resetting || !cycle?.supervision || !status.ready || status.paired !== true) {
+      return Promise.reject(new SetupError('Pairing reset is unavailable while the camera is starting, stopping, or already unpaired.'));
+    }
+    const target = cycle;
+    resetting = true;
+    target.resetRequested = true;
+    status = { ...status, ready: false, setupUri: null, error: null };
+    target.resetOperation = (async () => {
+      target.controller.abort();
+      const code = await target.supervision;
+      if (code !== 0) invalid('Camera services could not stop safely. Pairing was not changed. Restart the app before trying again.');
+      cancelled(signal);
+      try {
+        const backup = resetImpl(dataDir, target.prepared.state.username);
+        status = { ...status, paired: false, ready: false, setupUri: null, error: null };
+        log(`HomeKit pairing reset; previous state saved under pairing-backups/${backup.backupName}. Camera services are restarting.`);
+      } catch (error) {
+        const message = error instanceof PairingResetError ? error.message : 'Pairing reset failed. The saved identity and any backups have been preserved.';
+        status = { ...status, error: message };
+        throw new SetupError(message);
+      }
+    })().finally(() => { resetting = false; });
+    return target.resetOperation;
+  };
+  const stopCycle = () => cycle?.controller.abort();
+  signal?.addEventListener('abort', stopCycle, { once: true });
+  try {
+    cancelled(signal);
+    try { ui = await uiFactory({ port: SETUP_PORT, getStatus, resetPairing }); }
+    catch { invalid(`The setup page could not listen on port ${SETUP_PORT}. Check for a port conflict and restart the app.`); }
+    while (!signal?.aborted) {
+      const current = { controller: new AbortController(), prepared: undefined, supervision: undefined,
+        resetRequested: false, resetOperation: undefined };
+      cycle = current;
+      try {
+        current.prepared = await prepareImpl({ dataDir, validateBridge, signal: current.controller.signal });
+      } catch (error) {
+        if (signal?.aborted) return 0;
+        status = { ...status, ready: false, error: error instanceof SetupError ? error.message : 'Camera startup failed. Check the app options and camera availability.' };
+        log(status.error);
+        await pauseForRetry(signal, retryMs);
+        continue;
+      }
+      if (signal?.aborted) return 0;
+      status = { name: current.prepared.options.name, pincode: current.prepared.state.pincode,
+        setupUri: null, paired: null, ready: false, error: null };
+      current.supervision = superviseImpl(current.prepared, {
+        signal: current.controller.signal, log,
+        onStatus: update => { if (cycle === current && !current.controller.signal.aborted) status = { ...update }; },
+      });
+      const code = await current.supervision;
+      if (current.resetRequested) {
+        try { await current.resetOperation; } catch (error) { if (!signal?.aborted) log(error.message); }
+        if (signal?.aborted) return 0;
+        if (code !== 0) return 1; // Never start another process if the previous process did not stop.
+        continue;
+      }
+      return signal?.aborted ? 0 : code;
+    }
+    return 0;
+  } finally {
+    signal?.removeEventListener('abort', stopCycle);
+    cycle?.controller.abort();
+    if (cycle?.supervision) await cycle.supervision;
+    if (ui) await ui.close();
+  }
+}
+
 async function main() {
   process.umask(0o077);
   const abort = new AbortController();
@@ -347,8 +459,7 @@ async function main() {
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
   try {
     const { validateConfig } = require('/opt/homekit-h265/bridge/dist/config.js');
-    const prepared = await prepare({ validateBridge: validateConfig, signal: abort.signal });
-    return await supervise(prepared, { signal: abort.signal });
+    return await runApplication({ validateBridge: validateConfig, signal: abort.signal });
   } catch (error) {
     if (abort.signal.aborted) return 0;
     console.error(error instanceof SetupError ? error.message : 'App startup failed. Check the saved options and app installation.');
@@ -358,6 +469,7 @@ async function main() {
   }
 }
 
-module.exports = { DEFAULTS, SetupError, validateOptions, validatePairing, validPin, createPairing, savedPairing,
-  atomicJson, parseProbe, probeCamera, bridgeConfig, relayConfig, prepare, safeLine, pipeSafeLogs, waitForRelay, killTree, assertPortAvailable, supervise };
+module.exports = { DEFAULTS, SETUP_PORT, SetupError, validateOptions, validatePairing, validPin, createPairing, savedPairing,
+  atomicJson, parseProbe, probeCamera, bridgeConfig, relayConfig, prepare, safeLine, pipeSafeLogs, waitForRelay, killTree,
+  assertPortAvailable, supervise, parseStatus, runApplication };
 if (require.main === module) main().then(code => { process.exitCode = code; });

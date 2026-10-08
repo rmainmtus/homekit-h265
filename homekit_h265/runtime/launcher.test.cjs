@@ -10,8 +10,9 @@ const { spawn } = require('node:child_process');
 const { EventEmitter, once } = require('node:events');
 const { PassThrough } = require('node:stream');
 const {
-  DEFAULTS, SetupError, validateOptions, validPin, createPairing, atomicJson, parseProbe,
+  DEFAULTS, SETUP_PORT, SetupError, validateOptions, validPin, createPairing, atomicJson, parseProbe,
   probeCamera, bridgeConfig, relayConfig, prepare, pipeSafeLogs, waitForRelay, killTree, assertPortAvailable, supervise,
+  parseStatus, runApplication,
 } = require('./launcher.cjs');
 
 const options = () => ({ ...DEFAULTS, address: '192.0.2.20',
@@ -55,6 +56,7 @@ test('options validate mandatory RTSP, audio-independent settings, and recording
     { address: 'https://homeassistant.local' }, { stream_url: 'ffmpeg:rtsp://camera' },
     { stream_url: 'rtsp://camera/main#exec=bad' }, { stream_url: 'rtsp://camera/main\nsecret' },
     { motion_url: '' }, { recording: 'true' }, { port: 80 }, { port: 18554 },
+    { port: SETUP_PORT }, { relay_port: SETUP_PORT },
     { average_kbps: 63 }, { average_kbps: 9000 }, { peak_kbps: 100001 },
   ]) assert.throws(() => validateOptions({ ...options(), ...override }), SetupError);
   assert.equal(validateOptions({ ...options(), recording: false, motion_url: '' }).recording, false);
@@ -387,10 +389,20 @@ test('supervisor cleanup never signals a relay whose spawn failed, including abo
 });
 
 test('children ignoring graceful termination are killed after bounded grace period', async () => {
-  const h = supervisorHarness({ kill: (child, signal) => child.kill(signal), graceMs: 15 });
+  const h = supervisorHarness({ kill: (child, signal) => {
+    child.kill(signal);
+    if (signal === 'SIGKILL') queueMicrotask(() => child.emit('close', null, 'SIGKILL'));
+  }, graceMs: 15 });
   await nextTurn(); h.controller.abort();
   assert.equal(await h.promise, 0);
   for (const child of h.children) assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('an unconfirmed child shutdown exits nonzero so pairing state cannot be reset', async () => {
+  const h = supervisorHarness({ kill: (child, signal) => child.kill(signal), graceMs: 5, forceGraceMs: 5 });
+  await nextTurn(); h.controller.abort();
+  assert.equal(await h.promise, 1);
+  assert.match(h.logs.join('\n'), /Pairing state must remain unchanged/);
 });
 
 test('unavailable port blocks all process startup without leaking raw error text', async () => {
@@ -409,4 +421,138 @@ test('relay readiness checks actual listener and detects port conflicts', async 
   await new Promise(resolve => server.close(resolve));
   await assertPortAvailable('127.0.0.1', port);
   await assert.rejects(waitForRelay(port, { timeoutMs: 30 }), /did not start/);
+});
+
+function statusMessage(prepared, paired = true) {
+  return { type: 'homekit-status', name: prepared.options.name, pincode: prepared.state.pincode,
+    setupUri: 'X-HM://0023ISYWYABCD', paired, ready: true };
+}
+
+test('status IPC accepts only pairing data for the current identity and strips unexpected fields', () => {
+  const prepared = preparedStub(), message = statusMessage(prepared);
+  const parsed = parseStatus({ ...message, stream_url: options().stream_url }, prepared.state.pincode);
+  assert.deepEqual(Object.keys(parsed).sort(), ['error', 'name', 'paired', 'pincode', 'ready', 'setupUri']);
+  assert.equal(parsed.paired, true); assert.equal(parsed.ready, true);
+  for (const fields of [{ type: 'log' }, { pincode: '123-45-678' }, { paired: 'true' }, { ready: 1 },
+    { setupUri: options().stream_url }, { name: 'bad\nname' }]) {
+    assert.equal(parseStatus({ ...message, ...fields }, prepared.state.pincode), undefined);
+  }
+});
+
+test('bridge status uses IPC, ignores malformed messages, and stops updates during shutdown', async () => {
+  const updates = [];
+  const h = supervisorHarness({ onStatus: value => updates.push(value) });
+  await nextTurn();
+  assert.deepEqual(h.calls[1].spawnOptions.stdio, ['ignore', 'pipe', 'pipe', 'ipc']);
+  // The startup log deliberately contains the pairing code, unlike camera URLs.
+  const pin = h.logs.find(line => line.startsWith('HomeKit pairing code: ')).slice('HomeKit pairing code: '.length);
+  const message = { type: 'homekit-status', name: 'Camera', pincode: pin, setupUri: null, paired: false, ready: true };
+  h.children[1].emit('message', { ...message, pincode: '000-00-000' });
+  h.children[1].emit('message', message);
+  assert.equal(updates.length, 1);
+  h.controller.abort(); h.children[1].emit('message', message);
+  assert.equal(await h.promise, 0); assert.equal(updates.length, 1);
+});
+
+function applicationHarness(t, overrides = {}) {
+  const controller = new AbortController(), prepared = preparedStub(), events = [], runs = [], logs = [];
+  let uiOptions, uiClosed = 0;
+  const result = runApplication({
+    dataDir: '/test-data', signal: controller.signal, retryMs: 5, log: line => logs.push(line),
+    uiFactory: async input => { uiOptions = input; events.push('ui'); return { close: async () => { uiClosed++; } }; },
+    prepareImpl: async () => { events.push('prepare'); return prepared; },
+    superviseImpl: (_prepared, input) => new Promise(resolve => {
+      const run = { ...input, resolve }; runs.push(run); events.push('start');
+      input.signal.addEventListener('abort', () => {
+        events.push('stop'); queueMicrotask(() => { events.push('closed'); resolve(0); });
+      }, { once: true });
+    }),
+    resetImpl: (dir, username) => {
+      assert.equal(dir, '/test-data'); assert.equal(username, prepared.state.username);
+      events.push('backup'); return { backupName: 'test-backup' };
+    },
+    ...overrides,
+  });
+  t.after(async () => { controller.abort(); await result; });
+  return { controller, prepared, events, runs, logs, result,
+    get ui() { return uiOptions; }, get uiClosed() { return uiClosed; },
+    ready(paired = true) { runs.at(-1).onStatus(parseStatus(statusMessage(prepared, paired), prepared.state.pincode)); },
+  };
+}
+
+test('pairing reset closes both services before backup and reprobes with the same identity', async t => {
+  const h = applicationHarness(t); await nextTurn(); h.ready();
+  const identity = { ...h.prepared.state };
+  assert.equal(h.ui.port, SETUP_PORT);
+  const resetting = h.ui.resetPairing();
+  assert.equal(h.ui.getStatus().ready, false); assert.equal(h.ui.getStatus().setupUri, null);
+  await assert.rejects(h.ui.resetPairing(), /unavailable/);
+  await resetting; await nextTurn();
+  assert.deepEqual(h.events, ['ui', 'prepare', 'start', 'stop', 'closed', 'backup', 'prepare', 'start']);
+  assert.deepEqual(h.prepared.state, identity);
+  assert.equal(h.runs.length, 2); assert.equal(h.uiClosed, 0);
+  assert.equal(h.ui.getStatus().ready, false);
+  h.ready(false); assert.equal(h.ui.getStatus().paired, false);
+  assert.equal(h.ui.getStatus().pincode, identity.pincode);
+  assert.equal(h.ui.getStatus().ready, true);
+  h.controller.abort(); assert.equal(await h.result, 0); assert.equal(h.uiClosed, 1);
+});
+
+test('reset is unavailable before advertisement and when already unpaired', async t => {
+  const h = applicationHarness(t); await nextTurn();
+  await assert.rejects(h.ui.resetPairing(), /unavailable/);
+  h.ready(false); await assert.rejects(h.ui.resetPairing(), /unavailable/);
+  assert.equal(h.events.includes('backup'), false);
+});
+
+test('setup page remains available while startup fails and retries without leaking errors', async t => {
+  let tries = 0;
+  const prepared = preparedStub();
+  const h = applicationHarness(t, { prepareImpl: async () => {
+    if (++tries === 1) throw new Error(options().stream_url);
+    return prepared;
+  } });
+  await nextTurn();
+  assert.equal(h.ui.getStatus().ready, false);
+  assert.match(h.ui.getStatus().error, /Camera startup failed/);
+  assert.doesNotMatch(JSON.stringify(h.ui.getStatus()) + h.logs.join(''), /super-secret|camera-user/);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(h.runs.length, 1); assert.equal(h.uiClosed, 0);
+});
+
+test('reset backup failure restarts original state and returns only a safe error', async t => {
+  const h = applicationHarness(t, { resetImpl: () => { throw new Error(options().stream_url); } });
+  await nextTurn(); h.ready();
+  await assert.rejects(h.ui.resetPairing(), /identity and any backups have been preserved/);
+  await nextTurn();
+  assert.equal(h.runs.length, 2); assert.equal(h.uiClosed, 0);
+  assert.doesNotMatch(h.logs.join('\n'), /super-secret|camera-user/);
+});
+
+test('reset never touches storage or restarts after services fail to stop', async t => {
+  let touched = false, run;
+  const h = applicationHarness(t, {
+    superviseImpl: (_prepared, input) => new Promise(resolve => {
+      run = input; input.signal.addEventListener('abort', () => resolve(1), { once: true });
+    }),
+    resetImpl: () => { touched = true; },
+  });
+  await nextTurn(); run.onStatus(parseStatus(statusMessage(h.prepared), h.prepared.state.pincode));
+  await assert.rejects(h.ui.resetPairing(), /could not stop safely/);
+  assert.equal(await h.result, 1); assert.equal(touched, false); assert.equal(h.uiClosed, 1);
+});
+
+test('a spontaneous service crash closes the setup page and exits for Supervisor restart', async t => {
+  const h = applicationHarness(t); await nextTurn();
+  h.runs[0].resolve(1);
+  assert.equal(await h.result, 1); assert.equal(h.uiClosed, 1);
+});
+
+test('setup page bind failure is clear and never starts or resets camera services', async () => {
+  let prepared = false;
+  await assert.rejects(runApplication({
+    uiFactory: async () => { throw new Error(options().stream_url); },
+    prepareImpl: async () => { prepared = true; },
+  }), new SetupError(`The setup page could not listen on port ${SETUP_PORT}. Check for a port conflict and restart the app.`));
+  assert.equal(prepared, false);
 });

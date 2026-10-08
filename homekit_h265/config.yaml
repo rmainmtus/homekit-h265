@@ -1,5 +1,5 @@
 name: HomeKit H.265
-version: "0.1.1"
+version: "0.1.2"
 slug: homekit_h265
 description: Native HEVC camera streaming and experimental Secure Video for Apple Home
 url: https://github.com/rmainmtus/homekit-h265
@@ -11,6 +11,9 @@ startup: application
 boot: auto
 init: true
 host_network: true
+ingress: true
+ingress_port: 18664
+panel_icon: mdi:cctv
 timeout: 30
 backup: cold
 options:

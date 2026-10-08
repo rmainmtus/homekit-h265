@@ -38,8 +38,17 @@ After saving options, enable **Start on boot** and **Watchdog** on the app's Inf
 tab, then start the app. Watchdog is needed for automatic restart after a failed
 camera probe or a service crash; it is not enabled by default.
 
-Add a new accessory in Apple Home using the
-pairing code in the app log. In the camera's Recording Options, select Stream and
+Click **Open Web UI** on the app's Info tab. The setup page shows its live pairing
+status, QR code, and a copyable pairing code. Scan the QR with Apple Home on an
+iPhone connected to the same home network. If viewing the page on that iPhone,
+copy the code and enter it in Apple Home manually.
+
+Pair directly with **Apple Home**. Do not configure this camera through Home
+Assistant's **HomeKit Device** integration: that claims the pairing and makes
+the camera unavailable to Apple Home. Home Assistant runs the app; your Apple
+home hub handles Secure Video.
+
+In the camera's Recording Options, select Stream and
 Record for the locations you want. Walk through view, then verify the clip actually
 appears and plays. Choose specific-motion categories in Apple Home if desired;
 the home hub performs that classification.
@@ -47,6 +56,26 @@ the home hub performs that classification.
 Test Wi-Fi and cellular live viewing. A successful server startup alone does not
 prove Apple Home playback or iCloud recording. Keep the app running for an extended
 trial before relying on it for an important camera.
+
+### If the camera says it is already paired
+
+If you accidentally paired it through Home Assistant's HomeKit Device integration,
+remove that camera's integration entry first. If the setup page still says it is
+paired, use **Reset pairing** and confirm the warning. This stops this app's camera,
+archives its HomeKit state privately under `/data/pairing-backups`, then starts it
+with no paired controllers. The app keeps its camera configuration, accessory
+identity, and numeric pairing code. Its QR code may change; use the newly displayed
+one. Other camera apps are unaffected.
+
+Only reset when you intend to pair this camera again. Existing Apple Home recording
+history may become inaccessible, and recording/privacy settings must be set again.
+If this camera is already listed in Apple Home, remove its old entry before pairing
+it again with the new setup code.
+Keep the private backup; it contains HomeKit keys and must not be shared publicly.
+
+The setup page is accessible through Home Assistant's authenticated Ingress only.
+Its server uses port `18664`, reserved for this app, and refuses direct LAN access.
+It does not require Supervisor API access or any internet port forwarding.
 
 ## Storage, updates and privacy
 
