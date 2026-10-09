@@ -1,6 +1,6 @@
 {
   "name": "homekit-h265-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Native HEVC Apple Home camera service for the Home Assistant community app",
   "license": "Apache-2.0",

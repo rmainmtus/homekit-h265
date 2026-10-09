@@ -32,7 +32,7 @@ RUN set -eu; \
     chmod 0755 /usr/local/bin/go2rtc
 
 FROM ${NODE_IMAGE}
-ARG BUILD_VERSION=0.1.2
+ARG BUILD_VERSION=0.1.3
 ARG BUILD_ARCH="aarch64|amd64"
 LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \

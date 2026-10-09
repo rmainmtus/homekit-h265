@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+- Fix grey Apple Home camera previews by waiting for a complete HEVC keyframe
+  before creating the snapshot image.
+- Check decoded preview contrast in the real-media smoke test while the relay
+  is already streaming, catching grey images that still pass JPEG validation.
+
 ## 0.1.2
 
 - Add an authenticated Home Assistant setup page with a HomeKit QR code,

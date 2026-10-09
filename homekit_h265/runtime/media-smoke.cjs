@@ -23,6 +23,7 @@ const OUTPUT_LIMIT = 1048576;
 async function main() {
   assert.equal(process.platform, 'linux', 'Run this smoke test inside the Linux app image.');
   const { validateConfig } = require('../bridge/dist/config.js');
+  const { captureSnapshot } = require('../bridge/dist/snapshot.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'homekit-h265-media-smoke-'));
   // go2rtc QuoteSplit has deliberately simple quoting. Use only the generated safe path.
   assert.match(dir, /^\/[A-Za-z0-9_./-]+$/);
@@ -175,7 +176,35 @@ async function main() {
       '-hide_banner', '-loglevel', 'error', '-nostdin', '-xerror', '-threads', '1', '-i', capture,
       '-map', '0:v:0', '-map', '0:a:0', '-f', 'null', '-',
     ]);
-    console.log('Media smoke passed: native HEVC video and AAC audio survived the bundled relay and stream-copy path, with a decodable result.');
+    console.log('Media smoke: checking preview pictures while the relay is already streaming.');
+    const warm = launch('Warm preview consumer', FFMPEG, [
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:1',
+      '-rtsp_transport', 'tcp', '-timeout', '8000000', '-i', relayUrl,
+      '-map', '0:v:0', '-an', '-c:v', 'copy', '-f', 'null', '-',
+    ]);
+    const warmDeadline = Date.now() + 12000;
+    while (!/frame=(?:[2-9]\d|\d{3,})\b/.test(warm.stdout)) {
+      controller.signal.throwIfAborted(); assertRunning(warm);
+      assert.ok(Date.now() < warmDeadline, 'Preview consumer did not receive enough frames.');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      controller.signal.throwIfAborted();
+      const jpeg = await captureSnapshot(FFMPEG, relayUrl, 120, 160);
+      const snapshot = path.join(dir, `preview-${attempt}.jpg`);
+      fs.writeFileSync(snapshot, jpeg);
+      const statistics = await run('Preview image decode', FFMPEG, [
+        '-hide_banner', '-loglevel', 'error', '-nostdin', '-i', snapshot,
+        '-vf', 'signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-',
+      ]);
+      const low = Number(statistics.match(/lavfi\.signalstats\.YLOW=(\d+)/)?.[1]);
+      const high = Number(statistics.match(/lavfi\.signalstats\.YHIGH=(\d+)/)?.[1]);
+      // The generated test pattern has broad contrast. A valid JPEG header
+      // alone cannot catch the nearly uniform grey image from a missing keyframe.
+      assert.ok(high - low >= 70, `Preview ${attempt} lost the test pattern (contrast ${high - low}).`);
+      assertRunning(warm);
+    }
+    console.log('Media smoke passed: native HEVC/audio relay, decoded media, and three non-grey previews from an active stream.');
   } catch (error) {
     // These processes see only generated fixture paths and localhost URLs, never credentials.
     for (const entry of tracked) {

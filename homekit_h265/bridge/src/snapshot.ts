@@ -55,7 +55,11 @@ export async function captureSnapshot(ffmpeg: string, source: string, height: nu
       '-rtsp_transport', 'tcp', '-timeout', '5000000',
       // A still image needs only video discovery; default stream probing can
       // consume the entire seven-second Home snapshot deadline on this camera.
-      '-analyzeduration', '100000', '-probesize', '100000', '-i', source, '-an', '-sn', '-dn',
+      '-analyzeduration', '100000', '-probesize', '100000',
+      // A warm relay can start between HEVC keyframes. Debian's decoder may
+      // output a concealed grey frame before it has the reference pictures.
+      // Wait for an independently decodable picture before returning the JPEG.
+      '-skip_frame', 'nokey', '-i', source, '-an', '-sn', '-dn',
       '-frames:v', '1', '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
       '-threads', '1', '-c:v', 'mjpeg', '-f', 'image2pipe', 'pipe:1'], {shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore']});
     const chunks: Buffer[] = []; let size = 0, settled = false;
